@@ -467,6 +467,38 @@ function suggestFor(iso){
   return es.concat(fixed, recent);
 }
 
+/* ---------- 自動で割り当てる ----------
+   締切の早い順（本気度S以上は締切の3日前を目標）に、深い作業の枠へ上から入れる。
+   枠に入りきらない作業は「◯分ぶん進める」にして、残りは次の枠・次の日へ。      */
+function autoFill(iso){
+  const slots = blocksOf(iso).filter(b => b.k === "d" && !taskOf(iso, b).task);
+  if(!slots.length){ toast("空いている深い作業の枠がありません"); return; }
+  const used = usedTasks(iso);
+  const es = (st.suggest || []).filter(t => !used.has(t.label)).map(t => ({...t, left: t.minutes}));
+  const extra = FIXED_SUGGEST.filter(t => !used.has(t.label)).map(t => ({...t, left: t.minutes}));
+  const queue = es.concat(extra);
+  const d = dayState(iso);
+  let n = 0, late = [];
+  slots.forEach(b => {
+    const cap = b.e - b.s;
+    const t = queue.find(x => x.left > 0);
+    if(!t) return;
+    const use = Math.min(cap, t.left);
+    d.tasks[keyOf(b)] = {
+      task: t.label,
+      goal: t.left <= cap ? (t.rank ? "出せるところまで終わらせる" : "終わらせる") : `${use}分ぶん進める`,
+    };
+    t.left -= use;
+    n++;
+    if(t.target && t.target < iso) late.push(t.label);
+  });
+  // 目標の日を過ぎているのに入りきらなかったもの＝諦めるか、余白を使うか決めるもの
+  const over = queue.filter(x => x.left > 0 && x.target && x.target <= iso).map(x => x.label);
+  save(); resetWall(); render();
+  toast(over.length ? `${n}枠に入れました。${over[0]}${over.length > 1 ? `ほか${over.length - 1}件` : ""}は入りきりません`
+                    : `${n}枠に入れました`);
+}
+
 /* ---------- 画面 ---------- */
 const app = document.getElementById("app");
 let tab = "day", cur = isoOf(new Date()), tplWd = 0, wallFile = null, wallUrl = null;
@@ -524,6 +556,7 @@ function renderDay(){
       <span class="small muted">${ds && ds.blocks ? "この日だけ変更中" : `${WD[wdOf(iso)]}曜の型のまま`}</span></div>
     <div class="blocks">${blockRows(list, iso)}</div>
     <div class="row wrap2">
+      <button class="btn acc" id="autoFill">やることを自動で入れる</button>
       <button class="btn" id="addBlk">＋ 予定を足す（面接など）</button>
       ${ds && ds.blocks ? `<button class="btn ghost" id="resetDay">曜日の型に戻す</button>` : ""}
     </div>
@@ -609,7 +642,7 @@ function renderSet(){
     <h2>最初に戻す</h2>
     <button class="btn ghost" id="resetTpl" style="align-self:flex-start">曜日の型をパターン4に戻す</button>
   </section>
-  <p class="small muted">sched-v4</p>`;
+  <p class="small muted">sched-v5</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -674,6 +707,7 @@ app.addEventListener("click", async ev => {
     else openEdit({scope:"tpl", wd:tplWd, index:i}, st.tpl[tplWd].blocks.slice().sort((a,b)=>a.s-b.s)[i]);
     return;
   }
+  if(t.id === "autoFill"){ autoFill(cur); return; }
   if(t.id === "addBlk"){ openEdit({scope:"day", iso:cur, index:null}, null); return; }
   if(t.id === "addTpl"){ openEdit({scope:"tpl", wd:tplWd, index:null}, null); return; }
   if(t.id === "resetDay"){ if(confirm("この日の変更をやめて、曜日の型に戻しますか？")){ delete dayState(cur).blocks; save(); resetWall(); render(); } return; }
