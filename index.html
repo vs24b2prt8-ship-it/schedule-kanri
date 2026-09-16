@@ -222,6 +222,27 @@ function defaultTpl(){
   ];
 }
 
+// 9月の型：大学も夜勤もない期間。起きる・寝る時間は後期（13:00起き・5:30就寝）に合わせてある。
+// 火曜だけ英智学館（17:30〜20:30）。深い作業は15:00〜19:00の集中できる時間を中心に置く。
+function septTpl(){
+  const WAKE = [B(780,790,"c","起きて確認"), B(790,820,"m","外を歩く",1,"🎧英語 → シャワー・昼食"),
+                B(820,860,"l","シャワー・昼食"), B(860,900,"j","事務",1,"メール・日程調整")];
+  const NIGHT_TAIL = [B(1665,1680,"c","夜の入力・明日の確認",1), B(1680,1770,"l","就寝準備 → 5:30に寝る",1)];
+  const free = WAKE.concat([
+    B(900,990,"d","深い作業",2), B(990,1005,"r","休憩"), B(1005,1095,"d","深い作業",2),
+    B(1095,1125,"s","GATB-S・口頭カード",1), B(1125,1185,"b","筋トレ",1), B(1185,1245,"l","風呂・夕食",1),
+    B(1245,1335,"d","深い作業",2), B(1335,1365,"l","夜食"), B(1365,1455,"d","確保（Webテスト・企業研究）",1),
+    B(1455,1515,"g","スマブラ練習",1), B(1515,1665,"y","余白")], NIGHT_TAIL);
+  const tue = WAKE.concat([
+    B(900,1005,"d","深い作業",2), B(1005,1035,"s","GATB-S・口頭カード",1), B(1035,1050,"l","英智学館の準備"),
+    B(1050,1230,"w","英智学館",2,"17:15 準備 ／ 〜20:30"), B(1230,1290,"l","風呂・夕食",1),
+    B(1290,1410,"d","深い作業",2), B(1410,1440,"l","夜食"), B(1440,1530,"d","確保（Webテスト・企業研究）",1),
+    B(1530,1590,"g","スマブラ練習",1), B(1590,1665,"y","余白")], NIGHT_TAIL);
+  const day = (note, blocks) => ({label:"大学なし", note, blocks});
+  return [day("就活に集中", free), day("英智学館", tue), day("就活に集中", free), day("就活に集中", free),
+          day("就活に集中", free), day("週末", free), day("週末", free)];
+}
+
 /* ---------- 保存 ---------- */
 function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], imported:{}, suggest:[], recent:[], settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
 function load(){
@@ -639,10 +660,14 @@ function renderSet(){
     <textarea id="io" rows="5" placeholder="書き出したJSONをここに貼り付け"></textarea>
   </section>
   <section class="sec">
-    <h2>最初に戻す</h2>
-    <button class="btn ghost" id="resetTpl" style="align-self:flex-start">曜日の型をパターン4に戻す</button>
+    <h2>曜日の型を入れ替える</h2>
+    <div class="row wrap2">
+      <button class="btn" id="tplSept">9月の型（大学なし・夜勤なし）</button>
+      <button class="btn" id="resetTpl">後期の型（パターン4）</button>
+    </div>
+    <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。10月になったら「後期の型」に戻してください。</p>
   </section>
-  <p class="small muted">sched-v5</p>`;
+  <p class="small muted">sched-v6</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -774,7 +799,8 @@ app.addEventListener("click", async ev => {
     }catch(e){ toast("読み込めませんでした。書き出したJSONをそのまま貼ってください"); }
     return;
   }
-  if(t.id === "resetTpl"){ if(confirm("曜日の型をパターン4に戻しますか？（日ごとの変更と締切は残ります）")){ st.tpl = defaultTpl(); save(); toast("戻しました"); } return; }
+  if(t.id === "resetTpl"){ if(confirm("曜日の型を後期（パターン4）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = defaultTpl(); save(); toast("後期の型にしました"); render(); } return; }
+  if(t.id === "tplSept"){ if(confirm("曜日の型を9月（大学なし・夜勤なし）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = septTpl(); save(); toast("9月の型にしました"); render(); } return; }
 });
 app.addEventListener("keydown", ev => { if((ev.key === "Enter" || ev.key === " ") && ev.target.matches("[data-edit]")){ ev.preventDefault(); ev.target.click(); } });
 app.addEventListener("change", ev => {
