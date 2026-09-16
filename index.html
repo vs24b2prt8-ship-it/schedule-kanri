@@ -72,6 +72,11 @@ h2{margin:0;font-size:14px;font-weight:500}
 .blk.deep{background:color-mix(in srgb,var(--accent) 9%,var(--bg))}
 .blk .inputs{grid-column:3;display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .blk .inputs input{min-height:36px;font-size:14px;padding:6px 9px}
+.sug{grid-column:3;display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.sug button{font-size:12.5px;border:1px solid var(--border);background:var(--bg);border-radius:999px;padding:5px 11px;cursor:pointer;color:var(--text)}
+.sug button .r{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--muted);margin-left:5px}
+.sug button.near{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--bg))}
+.sug .more{color:var(--muted)}
 .rev{grid-column:3;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:13px;color:var(--muted)}
 .rev label{display:flex;gap:5px;align-items:center}
 .rev input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
@@ -120,6 +125,7 @@ label.f>span{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:va
 <body>
 <div id="toast" role="status"></div>
 <main class="wrap" id="app"></main>
+<datalist id="sugList"></datalist>
 <nav>
   <button type="button" data-tab="day" aria-current="true">予定</button>
   <button type="button" data-tab="tpl">曜日の型</button>
@@ -217,7 +223,7 @@ function defaultTpl(){
 }
 
 /* ---------- 保存 ---------- */
-function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], imported:{}, settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
+function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], imported:{}, suggest:[], recent:[], settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
 function load(){
   try{
     const s = JSON.parse(localStorage.getItem(LS) || "null");
@@ -391,9 +397,11 @@ async function importFromPC(manual){
       st.imported[ev.id] = ev.date;
       n++;
     });
+    if(Array.isArray(data.tasks)) st.suggest = data.tasks;
     lastSync = Date.now();
-    if(n){ save(); resetWall(); render(); toast(`${n}件の予定を取り込みました`); }
-    else if(manual) toast("新しい予定はありませんでした");
+    save();
+    if(n){ resetWall(); render(); toast(`${n}件の予定を取り込みました`); }
+    else { render(); if(manual) toast(`やることの候補を${(st.suggest||[]).length}件もらいました`); }
   }catch(e){
     if(manual) toast("PCが起きていないと取り込めません");
   }finally{ syncing = false; }
@@ -435,13 +443,42 @@ async function scheduleNotify(iso){
   toast(err ? `${n}件を予約（${err}件は失敗）` : n ? `${n}件の通知を予約しました` : "予約する通知がありませんでした（時間が過ぎています）");
 }
 
+/* ---------- やることの候補 ---------- */
+const FIXED_SUGGEST = [
+  {id:"sme-gatb", label:"GATB-S・口頭再現カード", minutes:30},
+  {id:"sotsu", label:"卒論の分析", minutes:90},
+  {id:"kigyou", label:"企業研究（1社）", minutes:60},
+  {id:"mensetsu", label:"面接準備（想定問答）", minutes:90},
+  {id:"webtest", label:"Webテスト対策", minutes:60},
+];
+function usedTasks(iso){
+  const d = st.days[iso] || {};
+  return new Set(Object.values(d.tasks || {}).map(t => t.task).filter(Boolean));
+}
+function suggestFor(iso){
+  const used = usedTasks(iso);
+  const es = (st.suggest || []).filter(t => !used.has(t.label)).map(t => ({
+    id:t.id, label:t.label, minutes:t.minutes, rank:t.rank, target:t.target, deadline:t.deadline,
+    near: t.target <= addDays(iso, 1),           // 目標の日が近い＝先にやるもの
+  }));
+  const fixed = FIXED_SUGGEST.filter(t => !used.has(t.label));
+  const recent = (st.recent || []).filter(x => !used.has(x) && !es.some(e => e.label === x) && !fixed.some(f => f.label === x))
+    .map(x => ({id:"r-"+x, label:x}));
+  return es.concat(fixed, recent);
+}
+
 /* ---------- 画面 ---------- */
 const app = document.getElementById("app");
 let tab = "day", cur = isoOf(new Date()), tplWd = 0, wallFile = null, wallUrl = null;
 
+function fillDatalist(){
+  const all = suggestFor(cur).map(x => x.label);
+  document.getElementById("sugList").innerHTML = all.map(l => `<option value="${esc(l)}">`).join("");
+}
 function render(){
   document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-current", String(b.dataset.tab === tab)));
   if(tab === "day") renderDay(); else if(tab === "tpl") renderTpl(); else renderSet();
+  if(tab === "day") fillDatalist();
 }
 
 function blockRows(list, iso){
@@ -451,8 +488,11 @@ function blockRows(list, iso){
     return `<div class="blk ${b.k==="d"?"deep":""} ${tk&&tk.done?"done":""}" style="--k:var(--k-${b.k})">
       <time>${hm(b.s)}–${hm(b.e)}</time><i></i>
       <div class="t" data-edit="${i}" role="button" tabindex="0"><b>${esc(b.t)}</b>${wl?`<span class="wbadge">壁紙 ${wl}</span>`:""}${b.sub?`<span class="sub">${esc(b.sub)}</span>`:""}</div>
+      ${tk && !tk.task && iso ? `<div class="sug">${suggestFor(iso).slice(0,5).map(x =>
+          `<button type="button" data-sug="${keyOf(b)}" data-label="${esc(x.label)}" class="${x.near?"near":""}">${esc(x.label)}${x.rank?`<span class="r">${x.rank}・${x.minutes}分</span>`:x.minutes?`<span class="r">${x.minutes}分</span>`:""}</button>`).join("")}
+        ${suggestFor(iso).length > 5 ? `<span class="more small">ほかは入力欄に打つと出ます</span>` : ""}</div>` : ""}
       ${tk ? `<div class="inputs">
-        <input data-task="${keyOf(b)}" data-f="task" placeholder="やること（例：カプコンのES）" value="${esc(tk.task||"")}">
+        <input data-task="${keyOf(b)}" data-f="task" list="sugList" placeholder="やること（候補から選ぶか、打つ）" value="${esc(tk.task||"")}">
         <input data-task="${keyOf(b)}" data-f="goal" placeholder="どこまで（例：下書きを終える）" value="${esc(tk.goal||"")}">
       </div>
       ${tk.task ? `<div class="rev">
@@ -569,7 +609,7 @@ function renderSet(){
     <h2>最初に戻す</h2>
     <button class="btn ghost" id="resetTpl" style="align-self:flex-start">曜日の型をパターン4に戻す</button>
   </section>
-  <p class="small muted">sched-v3</p>`;
+  <p class="small muted">sched-v4</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -646,6 +686,12 @@ app.addEventListener("click", async ev => {
     save(); resetWall(); render(); return;
   }
   if(t.dataset.deldl){ st.deadlines = st.deadlines.filter(x => x.id !== t.dataset.deldl); save(); resetWall(); render(); return; }
+  const sug = t.closest("[data-sug]");
+  if(sug){
+    const d = dayState(cur);
+    (d.tasks[sug.dataset.sug] ||= {}).task = sug.dataset.label;
+    save(); resetWall(); render(); return;
+  }
   if(t.id === "notify"){ scheduleNotify(cur); return; }
   if(t.dataset.carry){
     const tk = taskOf(cur, {s:+t.dataset.carry.split("-")[0], e:+t.dataset.carry.split("-")[1]});
@@ -699,7 +745,13 @@ app.addEventListener("click", async ev => {
 app.addEventListener("keydown", ev => { if((ev.key === "Enter" || ev.key === " ") && ev.target.matches("[data-edit]")){ ev.preventDefault(); ev.target.click(); } });
 app.addEventListener("change", ev => {
   const t = ev.target;
-  if(t.dataset.task){ const d = dayState(cur); (d.tasks[t.dataset.task] ||= {})[t.dataset.f] = t.type === "checkbox" ? t.checked : t.value.trim(); save(); if(t.dataset.f === "done" || t.dataset.f === "task") render(); resetWall(); document.getElementById("shareWall").disabled = true; return; }
+  if(t.dataset.task){
+    const d = dayState(cur);
+    (d.tasks[t.dataset.task] ||= {})[t.dataset.f] = t.type === "checkbox" ? t.checked : t.value.trim();
+    if(t.dataset.f === "task" && t.value.trim()){
+      st.recent = [t.value.trim()].concat((st.recent || []).filter(x => x !== t.value.trim())).slice(0, 12);
+    }
+    save(); if(t.dataset.f === "done" || t.dataset.f === "task") render(); resetWall(); document.getElementById("shareWall").disabled = true; return; }
   if(t.id === "dLabel" || t.id === "dNote"){ dayState(cur)[t.id === "dLabel" ? "label" : "note"] = t.value.trim(); save(); resetWall(); return; }
   if(t.id === "tLabel" || t.id === "tNote"){ st.tpl[tplWd][t.id === "tLabel" ? "label" : "note"] = t.value.trim(); save(); return; }
   if(t.id === "pcUrl"){ st.settings.pc = t.value.trim(); save(); toast("保存しました"); return; }
