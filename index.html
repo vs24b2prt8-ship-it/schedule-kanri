@@ -211,7 +211,7 @@ function defaultTpl(){
 }
 
 /* ---------- 保存 ---------- */
-function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], settings:{ntfy:""}}; }
+function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], imported:{}, settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
 function load(){
   try{
     const s = JSON.parse(localStorage.getItem(LS) || "null");
@@ -361,6 +361,38 @@ function roundRect(ctx, x, y, w, h, r){
   ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath();
 }
 
+/* ---------- PCから予定を取り込む（日取りで確定した面接・Googleカレンダー） ---------- */
+function clockT(v){ const m = String(v||"").match(/^(\d{1,2}):(\d{2})$/); return m ? (+m[1])*60 + (+m[2]) : null; }
+let syncing = false, lastSync = 0;
+async function importFromPC(manual){
+  const url = (st.settings.pc || "").trim().replace(/\/$/, "");
+  if(!url){ if(manual) toast("設定にPCのアドレスを入れてください"); return; }
+  if(syncing) return;
+  syncing = true;
+  try{
+    const res = await fetch(`${url}/api/schedule/sync?days=21`, {cache:"no-store"});
+    if(!res.ok) throw new Error("bad");
+    const data = await res.json();
+    let n = 0;
+    (data.events || []).forEach(ev => {
+      if(!ev.id || !ev.date || st.imported[ev.id]) return;
+      let s0 = clockT(ev.start), e0 = clockT(ev.end);
+      if(s0 == null) return;
+      if(e0 == null || e0 <= s0) e0 = s0 + 60;
+      const d = dayState(ev.date);
+      if(!d.blocks) d.blocks = clone(st.tpl[wdOf(ev.date)].blocks);
+      d.blocks.push({s:s0, e:e0, k:"f", t:ev.title || "予定", w:2, sub:"日取り・カレンダーから"});
+      st.imported[ev.id] = ev.date;
+      n++;
+    });
+    lastSync = Date.now();
+    if(n){ save(); resetWall(); render(); toast(`${n}件の予定を取り込みました`); }
+    else if(manual) toast("新しい予定はありませんでした");
+  }catch(e){
+    if(manual) toast("PCが起きていないと取り込めません");
+  }finally{ syncing = false; }
+}
+
 /* ---------- 画面 ---------- */
 const app = document.getElementById("app");
 let tab = "day", cur = isoOf(new Date()), tplWd = 0, wallFile = null, wallUrl = null;
@@ -455,6 +487,12 @@ function renderSet(){
   app.innerHTML = `
   <div><div class="lab">設定</div><h1>スケジュール管理</h1></div>
   <section class="sec">
+    <h2>PCから予定を取り込む</h2>
+    <input id="pcUrl" value="${esc(st.settings.pc)}" placeholder="https://kawauso.tail786f62.ts.net/nittei">
+    <div class="row"><button class="btn" id="pull">今すぐ取り込む</button></div>
+    <p class="small muted" style="margin:0">日取りで確定した面接とGoogleカレンダーの予定を、その日の予定に足します。アプリを開いたときにも自動で試します（PCが起きているときだけ）。アドレスはこの端末にだけ保存されます。</p>
+  </section>
+  <section class="sec">
     <h2>通知（ntfy のトピック）</h2>
     <input id="ntfy" value="${esc(st.settings.ntfy)}" placeholder="推測されにくい名前">
     <p class="small muted" style="margin:0">10分前通知はこの次の更新で使います。トピック名はこの端末にだけ保存され、公開されません。</p>
@@ -473,7 +511,7 @@ function renderSet(){
     <h2>最初に戻す</h2>
     <button class="btn ghost" id="resetTpl" style="align-self:flex-start">曜日の型をパターン4に戻す</button>
   </section>
-  <p class="small muted">sched-v1</p>`;
+  <p class="small muted">sched-v2</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -578,6 +616,7 @@ app.addEventListener("click", async ev => {
     try{ localStorage.setItem(LS_THEME, t.dataset.theme); }catch(e){}
     return;
   }
+  if(t.id === "pull"){ importFromPC(true); return; }
   if(t.id === "exp"){ document.getElementById("io").value = JSON.stringify(st); toast("下の欄に書き出しました。全部コピーして保存してください"); return; }
   if(t.id === "imp"){
     try{
@@ -595,10 +634,15 @@ app.addEventListener("change", ev => {
   if(t.dataset.task){ const d = dayState(cur); (d.tasks[t.dataset.task] ||= {})[t.dataset.f] = t.value.trim(); save(); resetWall(); document.getElementById("shareWall").disabled = true; return; }
   if(t.id === "dLabel" || t.id === "dNote"){ dayState(cur)[t.id === "dLabel" ? "label" : "note"] = t.value.trim(); save(); resetWall(); return; }
   if(t.id === "tLabel" || t.id === "tNote"){ st.tpl[tplWd][t.id === "tLabel" ? "label" : "note"] = t.value.trim(); save(); return; }
+  if(t.id === "pcUrl"){ st.settings.pc = t.value.trim(); save(); toast("保存しました"); return; }
   if(t.id === "ntfy"){ st.settings.ntfy = t.value.trim(); save(); toast("保存しました"); return; }
 });
 
 render();
+importFromPC(false);
+document.addEventListener("visibilitychange", () => {
+  if(!document.hidden && Date.now() - lastSync > 60000) importFromPC(false);
+});
 if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(() => {}); }
 })();
 </script>
