@@ -72,6 +72,12 @@ h2{margin:0;font-size:14px;font-weight:500}
 .blk.deep{background:color-mix(in srgb,var(--accent) 9%,var(--bg))}
 .blk .inputs{grid-column:3;display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .blk .inputs input{min-height:36px;font-size:14px;padding:6px 9px}
+.rev{grid-column:3;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:13px;color:var(--muted)}
+.rev label{display:flex;gap:5px;align-items:center}
+.rev input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
+.rev input[type=text]{width:104px;min-height:34px;font-size:13px;padding:5px 8px}
+.rev .btn{padding:6px 10px;font-size:12px}
+.done b{text-decoration:line-through;color:var(--muted)}
 .wbadge{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin-left:6px;vertical-align:1px}
 
 /* 締切 */
@@ -393,6 +399,42 @@ async function importFromPC(manual){
   }finally{ syncing = false; }
 }
 
+/* ---------- 10分前の通知（ntfyに予約しておく。PCもアプリも閉じていて鳴る） ---------- */
+function blockDate(iso, mins){
+  const d = dateOf(iso);
+  d.setHours(0, 0, 0, 0);
+  d.setMinutes(mins); // 24:00を超える分はそのまま翌日になる
+  return d;
+}
+async function scheduleNotify(iso){
+  const topic = (st.settings.ntfy || "").trim();
+  if(!topic){ toast("設定にntfyのトピック名を入れてください"); return; }
+  const d = st.days[iso] || {};
+  if(d.notified && !confirm("この日はもう予約しています。もう一度押すと同じ通知が2回鳴ります。続けますか？")) return;
+  const list = blocksOf(iso).filter(b => +b.w > 0);
+  const now = Date.now();
+  let n = 0, err = 0;
+  for(const b of list){
+    const at = blockDate(iso, b.s).getTime() - 10*60*1000;   // 10分前
+    if(at < now + 30000) continue;                            // もう過ぎている
+    if(at > now + 3*24*3600*1000) continue;                   // ntfyは3日先まで
+    const tk = b.k === "d" ? taskOf(iso, b) : {};
+    const title = `${hm(b.s)} ${tk.task ? (/^深い作業/.test(b.t) ? "深い作業：" + tk.task : b.t) : b.t}`;
+    const msg = [tk.goal ? `ここまで：${tk.goal}` : b.sub, `${hm(b.s)}〜${hm(b.e)}`].filter(Boolean).join("　");
+    try{
+      const res = await fetch("https://ntfy.sh/", {
+        method:"POST", headers:{"Content-Type":"application/json; charset=utf-8"},
+        body: JSON.stringify({topic, title, message: msg, delay: String(Math.floor(at/1000)),
+                              tags:[b.k === "f" || b.k === "w" ? "briefcase" : "alarm_clock"]})
+      });
+      if(res.ok) n++; else err++;
+    }catch(e){ err++; }
+  }
+  dayState(iso).notified = {at: Date.now(), count: n};
+  save(); render();
+  toast(err ? `${n}件を予約（${err}件は失敗）` : n ? `${n}件の通知を予約しました` : "予約する通知がありませんでした（時間が過ぎています）");
+}
+
 /* ---------- 画面 ---------- */
 const app = document.getElementById("app");
 let tab = "day", cur = isoOf(new Date()), tplWd = 0, wallFile = null, wallUrl = null;
@@ -406,13 +448,18 @@ function blockRows(list, iso){
   return list.map((b,i) => {
     const tk = iso && b.k === "d" ? taskOf(iso,b) : null;
     const wl = +b.w === 2 ? "大" : +b.w === 1 ? "小" : "";
-    return `<div class="blk ${b.k==="d"?"deep":""}" style="--k:var(--k-${b.k})">
+    return `<div class="blk ${b.k==="d"?"deep":""} ${tk&&tk.done?"done":""}" style="--k:var(--k-${b.k})">
       <time>${hm(b.s)}–${hm(b.e)}</time><i></i>
       <div class="t" data-edit="${i}" role="button" tabindex="0"><b>${esc(b.t)}</b>${wl?`<span class="wbadge">壁紙 ${wl}</span>`:""}${b.sub?`<span class="sub">${esc(b.sub)}</span>`:""}</div>
       ${tk ? `<div class="inputs">
         <input data-task="${keyOf(b)}" data-f="task" placeholder="やること（例：カプコンのES）" value="${esc(tk.task||"")}">
         <input data-task="${keyOf(b)}" data-f="goal" placeholder="どこまで（例：下書きを終える）" value="${esc(tk.goal||"")}">
-      </div>` : ""}
+      </div>
+      ${tk.task ? `<div class="rev">
+        <label><input type="checkbox" data-task="${keyOf(b)}" data-f="done" ${tk.done?"checked":""}>できた</label>
+        <input type="text" inputmode="numeric" data-task="${keyOf(b)}" data-f="actual" placeholder="実際 分" value="${esc(tk.actual||"")}">
+        ${tk.done ? "" : `<button class="btn ghost" data-carry="${keyOf(b)}">明日に回す</button>`}
+      </div>` : ""}` : ""}
     </div>`;
   }).join("");
 }
@@ -452,6 +499,17 @@ function renderDay(){
         <input id="dlTime" placeholder="23:59" inputmode="numeric" style="width:84px;flex:none">
         <button class="btn" id="dlAdd" style="flex:none">追加</button>
       </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>10分前の通知</h2>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <button class="btn" id="notify">この日の通知を予約する</button>
+        <span class="small muted">${ds && ds.notified ? `予約済み ${ds.notified.count}件` : "未予約"}</span>
+      </div>
+      <p class="small muted" style="margin:8px 0 0">壁紙に出す予定の10分前に、スマホへ通知が届きます。予約はntfyのサーバーが覚えているので、PCもアプリも閉じていて鳴ります。予定を変えたら、古い通知は止められないので気をつけてください。</p>
     </div>
   </section>
 
@@ -511,7 +569,7 @@ function renderSet(){
     <h2>最初に戻す</h2>
     <button class="btn ghost" id="resetTpl" style="align-self:flex-start">曜日の型をパターン4に戻す</button>
   </section>
-  <p class="small muted">sched-v2</p>`;
+  <p class="small muted">sched-v3</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -588,6 +646,16 @@ app.addEventListener("click", async ev => {
     save(); resetWall(); render(); return;
   }
   if(t.dataset.deldl){ st.deadlines = st.deadlines.filter(x => x.id !== t.dataset.deldl); save(); resetWall(); render(); return; }
+  if(t.id === "notify"){ scheduleNotify(cur); return; }
+  if(t.dataset.carry){
+    const tk = taskOf(cur, {s:+t.dataset.carry.split("-")[0], e:+t.dataset.carry.split("-")[1]});
+    const nx = addDays(cur, 1);
+    const slot = blocksOf(nx).find(b => b.k === "d" && !(taskOf(nx, b).task));
+    if(!slot){ toast("明日は深い作業の枠が空いていません"); return; }
+    const d = dayState(nx); (d.tasks[keyOf(slot)] ||= {}).task = tk.task || "";
+    if(tk.goal) d.tasks[keyOf(slot)].goal = tk.goal;
+    save(); toast(`明日の${hm(slot.s)}に回しました`); return;
+  }
   if(t.id === "mkWall"){
     const cv = drawWallpaper(cur);
     cv.toBlob(blob => {
@@ -631,7 +699,7 @@ app.addEventListener("click", async ev => {
 app.addEventListener("keydown", ev => { if((ev.key === "Enter" || ev.key === " ") && ev.target.matches("[data-edit]")){ ev.preventDefault(); ev.target.click(); } });
 app.addEventListener("change", ev => {
   const t = ev.target;
-  if(t.dataset.task){ const d = dayState(cur); (d.tasks[t.dataset.task] ||= {})[t.dataset.f] = t.value.trim(); save(); resetWall(); document.getElementById("shareWall").disabled = true; return; }
+  if(t.dataset.task){ const d = dayState(cur); (d.tasks[t.dataset.task] ||= {})[t.dataset.f] = t.type === "checkbox" ? t.checked : t.value.trim(); save(); if(t.dataset.f === "done" || t.dataset.f === "task") render(); resetWall(); document.getElementById("shareWall").disabled = true; return; }
   if(t.id === "dLabel" || t.id === "dNote"){ dayState(cur)[t.id === "dLabel" ? "label" : "note"] = t.value.trim(); save(); resetWall(); return; }
   if(t.id === "tLabel" || t.id === "tNote"){ st.tpl[tplWd][t.id === "tLabel" ? "label" : "note"] = t.value.trim(); save(); return; }
   if(t.id === "pcUrl"){ st.settings.pc = t.value.trim(); save(); toast("保存しました"); return; }
