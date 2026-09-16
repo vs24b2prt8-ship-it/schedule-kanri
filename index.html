@@ -244,7 +244,7 @@ function septTpl(){
 }
 
 /* ---------- 保存 ---------- */
-function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], imported:{}, suggest:[], recent:[], settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
+function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], imported:{}, suggest:[], recent:[], meta:{tpl:0, days:{}, deadlines:0, imported:0, recent:0}, settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
 function load(){
   const base = fresh();
   try{
@@ -255,6 +255,8 @@ function load(){
       out.settings = Object.assign({}, base.settings, s.settings || {});
       if(!out.settings.pc) out.settings.pc = base.settings.pc;
       out.imported = out.imported || {};
+      out.meta = Object.assign({tpl:0, days:{}, deadlines:0, imported:0, recent:0}, s.meta || {});
+      out.meta.days = out.meta.days || {};
       out.suggest = out.suggest || [];
       out.recent = out.recent || [];
       return out;
@@ -263,9 +265,14 @@ function load(){
   return base;
 }
 let st = load();
-function save(){
+function save(kind, iso){
+  const now = Date.now();
+  if(kind === "days" && iso) st.meta.days[iso] = now;
+  else if(kind === "all"){ st.meta.tpl = st.meta.deadlines = st.meta.imported = st.meta.recent = now; }
+  else if(kind) st.meta[kind] = now;
   try{ localStorage.setItem(LS, JSON.stringify(st)); }
   catch(e){ toast("保存できませんでした（容量がいっぱいかもしれません）"); }
+  if(kind) queueSync();
 }
 function toast(msg){
   const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("on");
@@ -404,6 +411,48 @@ function roundRect(ctx, x, y, w, h, r){
   ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath();
 }
 
+/* ---------- PCと同じデータにする（あとから保存した方が勝つ・日ごとに比べる） ---------- */
+let syncTimer = null, stateInfo = "まだ同期していません";
+function pcUrl(){ return (st.settings.pc || "").trim().replace(/\/$/, ""); }
+function myDoc(){
+  return {v:1, tpl:st.tpl, days:st.days, deadlines:st.deadlines, imported:st.imported, recent:st.recent, meta:st.meta};
+}
+function applyDoc(doc){
+  if(!doc || doc.v !== 1) return;
+  if(Array.isArray(doc.tpl)) st.tpl = doc.tpl;
+  st.days = doc.days || {};
+  st.deadlines = doc.deadlines || [];
+  st.imported = doc.imported || {};
+  st.recent = doc.recent || [];
+  st.meta = Object.assign({tpl:0, days:{}, deadlines:0, imported:0, recent:0}, doc.meta || {});
+  st.meta.days = st.meta.days || {};
+  try{ localStorage.setItem(LS, JSON.stringify(st)); }catch(e){}
+}
+async function syncState(mode, manual){
+  const url = pcUrl();
+  if(!url){ if(manual) toast("設定にPCのアドレスを入れてください"); return; }
+  try{
+    const res = await fetch(`${url}/api/schedule/state?mode=${mode || "merge"}`, {
+      method:"POST", headers:{"Content-Type":"application/json; charset=utf-8"},
+      body: JSON.stringify(myDoc())
+    });
+    if(!res.ok) throw new Error("bad");
+    applyDoc(await res.json());
+    const hhmm = new Date().toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
+    stateInfo = `${hhmm} に同期しました`;
+    resetWall(); render();
+    if(manual) toast("同期しました");
+  }catch(e){
+    stateInfo = "PCに届かないので、この端末の中だけに保存しています";
+    if(manual){ toast("PCが起きていないと同期できません"); render(); }
+  }
+}
+function queueSync(){
+  if(!pcUrl()) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => syncState("merge", false), 2500);  // 打ち終わってから送る
+}
+
 /* ---------- PCから予定を取り込む（日取りで確定した面接・Googleカレンダー） ---------- */
 function clockT(v){ const m = String(v||"").match(/^(\d{1,2}):(\d{2})$/); return m ? (+m[1])*60 + (+m[2]) : null; }
 let syncing = false, lastSync = 0, syncInfo = "まだ取り込んでいません";
@@ -433,7 +482,7 @@ async function importFromPC(manual){
     const hhmm = new Date().toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
     syncInfo = `${hhmm} に取り込み：予定 ${(data.events||[]).length}件（うち新しく入れたのは ${n}件）／やること候補 ${(data.tasks||[]).length}件`;
     save();
-    if(n){ resetWall(); render(); toast(`${n}件の予定を取り込みました`); }
+    if(n){ save("imported"); resetWall(); render(); toast(`${n}件の予定を取り込みました`); }
     else { render(); if(manual) toast(`やることの候補を${(st.suggest||[]).length}件もらいました`); }
   }catch(e){
     syncInfo = `取り込めません（${e && e.message ? e.message : "PCに届かない"}）。PCが起きているか、アドレスが合っているか確認してください`;
@@ -473,7 +522,7 @@ async function scheduleNotify(iso){
     }catch(e){ err++; }
   }
   dayState(iso).notified = {at: Date.now(), count: n};
-  save(); render();
+  save("days", iso); render();
   toast(err ? `${n}件を予約（${err}件は失敗）` : n ? `${n}件の通知を予約しました` : "予約する通知がありませんでした（時間が過ぎています）");
 }
 
@@ -528,7 +577,7 @@ function autoFill(iso){
   });
   // 目標の日を過ぎているのに入りきらなかったもの＝諦めるか、余白を使うか決めるもの
   const over = queue.filter(x => x.left > 0 && x.target && x.target <= iso).map(x => x.label);
-  save(); resetWall(); render();
+  save("days", iso); resetWall(); render();
   toast(over.length ? `${n}枠に入れました。${over[0]}${over.length > 1 ? `ほか${over.length - 1}件` : ""}は入りきりません`
                     : `${n}枠に入れました`);
 }
@@ -656,6 +705,16 @@ function renderSet(){
     <input id="pcUrl" value="${esc(st.settings.pc)}" placeholder="https://kawauso.tail786f62.ts.net/nittei">
     <div class="row"><button class="btn" id="pull">今すぐ取り込む</button></div>
     <p class="small muted" style="margin:0"><b>状態：</b>${esc(syncInfo)}</p>
+  </section>
+  <section class="sec">
+    <h2>PCと同じデータにする</h2>
+    <div class="row wrap2">
+      <button class="btn acc" id="syncNow">今すぐ同期</button>
+      <button class="btn" id="syncPush">この端末でPCを上書き</button>
+      <button class="btn" id="syncPull">PCの内容でこの端末を上書き</button>
+    </div>
+    <p class="small muted" style="margin:0"><b>同期：</b>${esc(stateInfo)}</p>
+    <p class="small muted" style="margin:0">予定・やること・締切・曜日の型が、PCとスマホで同じになります。両方でいじったときは、あとから保存した方が勝ちます（日ごとに比べるので、別の日をいじったぶんは消えません）。PCが寝ているときは、この端末の中だけに保存して、次につながったときに送ります。</p>
     <p class="small muted" style="margin:0">日取りで確定した面接とGoogleカレンダーの予定を、その日の予定に足します。アプリを開いたときにも自動で試します（PCが起きているときだけ）。アドレスはこの端末にだけ保存されます。</p>
   </section>
   <section class="sec">
@@ -681,7 +740,7 @@ function renderSet(){
     </div>
     <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。10月になったら「後期の型」に戻してください。</p>
   </section>
-  <p class="small muted">sched-v7</p>`;
+  <p class="small muted">sched-v8</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -719,7 +778,7 @@ form.addEventListener("submit", ev => {
       const tk = dayState(editCtx.iso).tasks; if(tk[keyOf(orig)]){ tk[keyOf(b)] = tk[keyOf(orig)]; delete tk[keyOf(orig)]; }
     }
   }else list.push(b);
-  save(); dlg.close(); resetWall(); render();
+  save(editCtx.scope === "tpl" ? "tpl" : "days", editCtx.iso); dlg.close(); resetWall(); render();
 });
 document.getElementById("dlgCancel").onclick = () => dlg.close();
 document.getElementById("dlgDel").onclick = () => {
@@ -727,7 +786,7 @@ document.getElementById("dlgDel").onclick = () => {
   const orig = sorted[editCtx.index], list = targetList(editCtx);
   const i = list.findIndex(x => x.s === orig.s && x.e === orig.e && x.t === orig.t);
   if(i >= 0) list.splice(i,1);
-  save(); dlg.close(); resetWall(); render();
+  save(editCtx.scope === "tpl" ? "tpl" : "days", editCtx.iso); dlg.close(); resetWall(); render();
 };
 
 function resetWall(){ if(wallUrl) URL.revokeObjectURL(wallUrl); wallUrl = null; wallFile = null; }
@@ -749,21 +808,21 @@ app.addEventListener("click", async ev => {
   if(t.id === "autoFill"){ autoFill(cur); return; }
   if(t.id === "addBlk"){ openEdit({scope:"day", iso:cur, index:null}, null); return; }
   if(t.id === "addTpl"){ openEdit({scope:"tpl", wd:tplWd, index:null}, null); return; }
-  if(t.id === "resetDay"){ if(confirm("この日の変更をやめて、曜日の型に戻しますか？")){ delete dayState(cur).blocks; save(); resetWall(); render(); } return; }
+  if(t.id === "resetDay"){ if(confirm("この日の変更をやめて、曜日の型に戻しますか？")){ delete dayState(cur).blocks; save("days", cur); resetWall(); render(); } return; }
   if(t.dataset.wd != null){ tplWd = +t.dataset.wd; render(); return; }
   if(t.id === "dlAdd"){
     const text = document.getElementById("dlText").value.trim(), tm = document.getElementById("dlTime").value.trim();
     if(!text){ toast("締切の中身を入れてください"); return; }
     const p = tm ? parseT(tm) : null;
     st.deadlines.push({id: Date.now().toString(36), date: cur, text, time: p != null ? hm(p) : ""});
-    save(); resetWall(); render(); return;
+    save("deadlines"); resetWall(); render(); return;
   }
-  if(t.dataset.deldl){ st.deadlines = st.deadlines.filter(x => x.id !== t.dataset.deldl); save(); resetWall(); render(); return; }
+  if(t.dataset.deldl){ st.deadlines = st.deadlines.filter(x => x.id !== t.dataset.deldl); save("deadlines"); resetWall(); render(); return; }
   const sug = t.closest("[data-sug]");
   if(sug){
     const d = dayState(cur);
     (d.tasks[sug.dataset.sug] ||= {}).task = sug.dataset.label;
-    save(); resetWall(); render(); return;
+    save("days", cur); resetWall(); render(); return;
   }
   if(t.id === "notify"){ scheduleNotify(cur); return; }
   if(t.dataset.carry){
@@ -773,7 +832,7 @@ app.addEventListener("click", async ev => {
     if(!slot){ toast("明日は深い作業の枠が空いていません"); return; }
     const d = dayState(nx); (d.tasks[keyOf(slot)] ||= {}).task = tk.task || "";
     if(tk.goal) d.tasks[keyOf(slot)].goal = tk.goal;
-    save(); toast(`明日の${hm(slot.s)}に回しました`); return;
+    save("days", nx); toast(`明日の${hm(slot.s)}に回しました`); return;
   }
   if(t.id === "mkWall"){
     const cv = drawWallpaper(cur);
@@ -804,17 +863,20 @@ app.addEventListener("click", async ev => {
     return;
   }
   if(t.id === "pull"){ importFromPC(true); return; }
+  if(t.id === "syncNow"){ syncState("merge", true); return; }
+  if(t.id === "syncPush"){ if(confirm("PCの内容を、この端末の内容で上書きしますか？")) syncState("push", true); return; }
+  if(t.id === "syncPull"){ if(confirm("この端末の内容を、PCの内容で上書きしますか？")) syncState("pull", true); return; }
   if(t.id === "exp"){ document.getElementById("io").value = JSON.stringify(st); toast("下の欄に書き出しました。全部コピーして保存してください"); return; }
   if(t.id === "imp"){
     try{
       const s = JSON.parse(document.getElementById("io").value);
       if(!s || s.v !== 1 || !Array.isArray(s.tpl)) throw new Error("形式");
-      st = Object.assign(fresh(), s); save(); toast("読み込みました"); render();
+      st = Object.assign(fresh(), s); save("all"); toast("読み込みました"); render();
     }catch(e){ toast("読み込めませんでした。書き出したJSONをそのまま貼ってください"); }
     return;
   }
-  if(t.id === "resetTpl"){ if(confirm("曜日の型を後期（パターン4）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = defaultTpl(); save(); toast("後期の型にしました"); render(); } return; }
-  if(t.id === "tplSept"){ if(confirm("曜日の型を9月（大学なし・夜勤なし）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = septTpl(); save(); toast("9月の型にしました"); render(); } return; }
+  if(t.id === "resetTpl"){ if(confirm("曜日の型を後期（パターン4）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = defaultTpl(); save("tpl"); toast("後期の型にしました"); render(); } return; }
+  if(t.id === "tplSept"){ if(confirm("曜日の型を9月（大学なし・夜勤なし）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = septTpl(); save("tpl"); toast("9月の型にしました"); render(); } return; }
 });
 app.addEventListener("keydown", ev => { if((ev.key === "Enter" || ev.key === " ") && ev.target.matches("[data-edit]")){ ev.preventDefault(); ev.target.click(); } });
 app.addEventListener("change", ev => {
@@ -825,18 +887,19 @@ app.addEventListener("change", ev => {
     if(t.dataset.f === "task" && t.value.trim()){
       st.recent = [t.value.trim()].concat((st.recent || []).filter(x => x !== t.value.trim())).slice(0, 12);
     }
-    save(); if(t.dataset.f === "done" || t.dataset.f === "task") render(); resetWall(); document.getElementById("shareWall").disabled = true; return; }
-  if(t.id === "dLabel" || t.id === "dNote"){ dayState(cur)[t.id === "dLabel" ? "label" : "note"] = t.value.trim(); save(); resetWall(); return; }
-  if(t.id === "tLabel" || t.id === "tNote"){ st.tpl[tplWd][t.id === "tLabel" ? "label" : "note"] = t.value.trim(); save(); return; }
+    save("days", cur); if(t.dataset.f === "done" || t.dataset.f === "task") render(); resetWall(); document.getElementById("shareWall").disabled = true; return; }
+  if(t.id === "dLabel" || t.id === "dNote"){ dayState(cur)[t.id === "dLabel" ? "label" : "note"] = t.value.trim(); save("days", cur); resetWall(); return; }
+  if(t.id === "tLabel" || t.id === "tNote"){ st.tpl[tplWd][t.id === "tLabel" ? "label" : "note"] = t.value.trim(); save("tpl"); return; }
   if(t.id === "pcUrl"){ st.settings.pc = t.value.trim(); save(); toast("保存しました"); return; }
   if(t.id === "ntfy"){ st.settings.ntfy = t.value.trim(); save(); toast("保存しました"); return; }
 });
 
 render();
-importFromPC(false);
+syncState("merge", false).then(() => importFromPC(false));
 document.addEventListener("visibilitychange", () => {
-  if(!document.hidden && Date.now() - lastSync > 60000) importFromPC(false);
+  if(!document.hidden && Date.now() - lastSync > 60000){ syncState("merge", false); importFromPC(false); }
 });
+window.addEventListener("online", () => syncState("merge", false));
 if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(() => {}); }
 })();
 </script>
