@@ -246,11 +246,21 @@ function septTpl(){
 /* ---------- 保存 ---------- */
 function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], imported:{}, suggest:[], recent:[], settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
 function load(){
+  const base = fresh();
   try{
     const s = JSON.parse(localStorage.getItem(LS) || "null");
-    if(s && s.v === 1 && Array.isArray(s.tpl)) return Object.assign(fresh(), s);
+    if(s && s.v === 1 && Array.isArray(s.tpl)){
+      const out = Object.assign(base, s);
+      // settings は項目ごとに混ぜる（古い保存だと pc が無く、取り込みが動かなくなる）
+      out.settings = Object.assign({}, base.settings, s.settings || {});
+      if(!out.settings.pc) out.settings.pc = base.settings.pc;
+      out.imported = out.imported || {};
+      out.suggest = out.suggest || [];
+      out.recent = out.recent || [];
+      return out;
+    }
   }catch(e){}
-  return fresh();
+  return base;
 }
 let st = load();
 function save(){
@@ -396,10 +406,10 @@ function roundRect(ctx, x, y, w, h, r){
 
 /* ---------- PCから予定を取り込む（日取りで確定した面接・Googleカレンダー） ---------- */
 function clockT(v){ const m = String(v||"").match(/^(\d{1,2}):(\d{2})$/); return m ? (+m[1])*60 + (+m[2]) : null; }
-let syncing = false, lastSync = 0;
+let syncing = false, lastSync = 0, syncInfo = "まだ取り込んでいません";
 async function importFromPC(manual){
   const url = (st.settings.pc || "").trim().replace(/\/$/, "");
-  if(!url){ if(manual) toast("設定にPCのアドレスを入れてください"); return; }
+  if(!url){ syncInfo = "PCのアドレスが空です"; if(manual){ toast("設定にPCのアドレスを入れてください"); render(); } return; }
   if(syncing) return;
   syncing = true;
   try{
@@ -420,11 +430,14 @@ async function importFromPC(manual){
     });
     if(Array.isArray(data.tasks)) st.suggest = data.tasks;
     lastSync = Date.now();
+    const hhmm = new Date().toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
+    syncInfo = `${hhmm} に取り込み：予定 ${(data.events||[]).length}件（うち新しく入れたのは ${n}件）／やること候補 ${(data.tasks||[]).length}件`;
     save();
     if(n){ resetWall(); render(); toast(`${n}件の予定を取り込みました`); }
     else { render(); if(manual) toast(`やることの候補を${(st.suggest||[]).length}件もらいました`); }
   }catch(e){
-    if(manual) toast("PCが起きていないと取り込めません");
+    syncInfo = `取り込めません（${e && e.message ? e.message : "PCに届かない"}）。PCが起きているか、アドレスが合っているか確認してください`;
+    if(manual){ toast("PCが起きていないと取り込めません"); render(); }
   }finally{ syncing = false; }
 }
 
@@ -642,6 +655,7 @@ function renderSet(){
     <h2>PCから予定を取り込む</h2>
     <input id="pcUrl" value="${esc(st.settings.pc)}" placeholder="https://kawauso.tail786f62.ts.net/nittei">
     <div class="row"><button class="btn" id="pull">今すぐ取り込む</button></div>
+    <p class="small muted" style="margin:0"><b>状態：</b>${esc(syncInfo)}</p>
     <p class="small muted" style="margin:0">日取りで確定した面接とGoogleカレンダーの予定を、その日の予定に足します。アプリを開いたときにも自動で試します（PCが起きているときだけ）。アドレスはこの端末にだけ保存されます。</p>
   </section>
   <section class="sec">
@@ -667,7 +681,7 @@ function renderSet(){
     </div>
     <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。10月になったら「後期の型」に戻してください。</p>
   </section>
-  <p class="small muted">sched-v6</p>`;
+  <p class="small muted">sched-v7</p>`;
 }
 
 /* ---------- 編集シート ---------- */
