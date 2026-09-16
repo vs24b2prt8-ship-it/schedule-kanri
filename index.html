@@ -475,6 +475,7 @@ async function importFromPC(manual){
       if(!d.blocks) d.blocks = clone(st.tpl[wdOf(ev.date)].blocks);
       d.blocks.push({s:s0, e:e0, k:"f", t:ev.title || "予定", w:2, sub:"日取り・カレンダーから"});
       st.imported[ev.id] = ev.date;
+      st.meta.days[ev.date] = Date.now();   // 同期で「新しい」と分かるように
       n++;
     });
     if(Array.isArray(data.tasks)) st.suggest = data.tasks;
@@ -740,7 +741,7 @@ function renderSet(){
     </div>
     <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。10月になったら「後期の型」に戻してください。</p>
   </section>
-  <p class="small muted">sched-v8</p>`;
+  <p class="small muted">sched-v9</p>`;
 }
 
 /* ---------- 編集シート ---------- */
