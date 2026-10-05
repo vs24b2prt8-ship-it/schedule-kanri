@@ -243,6 +243,27 @@ function septTpl(){
           day("就活に集中", free), day("週末", free), day("週末", free)];
 }
 
+// 後期・夜勤なしの型（2026-10-06 本人：ローソンの夜勤はなし）。大学へ行くのは月（ゼミ）と木（資本市場）だけ。
+// 火は英智学館、ほかの日は9月の型と同じ「就活に集中」の日。日曜は月曜の12:30起きに合わせて5:00に寝る。
+function lateTpl(){
+  const late = defaultTpl(), sept = septTpl();
+  const TAIL = [B(1665,1680,"c","夜の入力・明日の確認",1), B(1680,1770,"l","就寝準備 → 5:30に寝る",1)];
+  const thu = late[3].blocks.filter(b => b.s < 1290).concat([
+    B(1290,1305,"r","休憩"), B(1305,1395,"d","深い作業",2), B(1395,1425,"l","夜食"),
+    B(1425,1515,"d","確保（Webテスト・企業研究）",1), B(1515,1665,"y","余白")], TAIL);
+  const sun = sept[6].blocks.filter(b => b.s < 1680).concat([B(1680,1740,"l","就寝準備 → 5:00に寝る",1,"月曜は12:30起き")]);
+  // 9月の型は同じ配列を何曜日にも使い回しているので、写してから返す（1つの曜日を直すと全部変わらないように）
+  return clone([
+    late[0],
+    {label:"大学なし", note:"英智学館", blocks: sept[1].blocks},
+    {label:"大学なし", note:"就活に集中", blocks: sept[2].blocks},
+    {label:"大学あり", note:"資本市場", blocks: thu},
+    {label:"大学なし", note:"就活に集中（財政学は自習）", blocks: sept[4].blocks},
+    {label:"大学なし", note:"週末", blocks: sept[5].blocks},
+    {label:"大学なし", note:"週末", blocks: sun},
+  ]);
+}
+
 /* ---------- 保存 ---------- */
 function fresh(){ return {v:1, tpl:defaultTpl(), days:{}, deadlines:[], imported:{}, suggest:[], recent:[], meta:{tpl:0, days:{}, deadlines:0, imported:0, recent:0}, settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
 function load(){
@@ -491,6 +512,30 @@ async function importFromPC(manual){
   }finally{ syncing = false; }
 }
 
+/* ---------- やることをPCに組んでもらう（2026-10-06 本人「今日何をやるかを選ぶのが面倒」） ----------
+   日取りの /api/schedule/autoplan が、今日・明日の深い作業の枠を締切順に埋めて返す。
+   自動で入れたものには auto が付き、手で書き換えたものは次から触られない。
+   毎朝6:00にPCが同じことをして、起きる10分前に「今日やること」をntfyで送る。 */
+async function planOnPC(manual, dates){
+  const url = pcUrl();
+  if(!url) return false;
+  if(syncTimer){ clearTimeout(syncTimer); syncTimer = null; await syncState("merge", false); }  // 打ったばかりの変更を先に送る
+  try{
+    const res = await fetch(`${url}/api/schedule/autoplan`, {
+      method:"POST", headers:{"Content-Type":"application/json; charset=utf-8"},
+      body: JSON.stringify({dates: dates || []})
+    });
+    if(!res.ok) throw new Error("bad");
+    const out = await res.json();
+    applyDoc(out.doc);
+    if(Array.isArray(out.tasks)) st.suggest = out.tasks;
+    save();
+    resetWall(); render();
+    if(manual) toast(out.changed ? "組み直しました" : "変わるところはありませんでした");
+    return true;
+  }catch(e){ return false; }
+}
+
 /* ---------- 10分前の通知（ntfyに予約しておく。PCもアプリも閉じていて鳴る） ---------- */
 function blockDate(iso, mins){
   const d = dateOf(iso);
@@ -554,7 +599,10 @@ function suggestFor(iso){
 /* ---------- 自動で割り当てる ----------
    締切の早い順（本気度S以上は締切の3日前を目標）に、深い作業の枠へ上から入れる。
    枠に入りきらない作業は「◯分ぶん進める」にして、残りは次の枠・次の日へ。      */
+// PCに届かないとき（「組み直す」を押したのにPCが寝ている）だけ使う。
 function autoFill(iso){
+  const d0 = dayState(iso);
+  Object.keys(d0.tasks).forEach(k => { if(d0.tasks[k].auto && !d0.tasks[k].done) delete d0.tasks[k]; });
   const slots = blocksOf(iso).filter(b => b.k === "d" && !taskOf(iso, b).task);
   if(!slots.length){ toast("空いている深い作業の枠がありません"); return; }
   const used = usedTasks(iso);
@@ -571,6 +619,7 @@ function autoFill(iso){
     d.tasks[keyOf(b)] = {
       task: t.label,
       goal: t.left <= cap ? (t.rank ? "出せるところまで終わらせる" : "終わらせる") : `${use}分ぶん進める`,
+      auto: true,
     };
     t.left -= use;
     n++;
@@ -640,11 +689,11 @@ function renderDay(){
       <span class="small muted">${ds && ds.blocks ? "この日だけ変更中" : `${WD[wdOf(iso)]}曜の型のまま`}</span></div>
     <div class="blocks">${blockRows(list, iso)}</div>
     <div class="row wrap2">
-      <button class="btn acc" id="autoFill">やることを自動で入れる</button>
+      <button class="btn acc" id="autoFill">やることを組み直す</button>
       <button class="btn" id="addBlk">＋ 予定を足す（面接など）</button>
       ${ds && ds.blocks ? `<button class="btn ghost" id="resetDay">曜日の型に戻す</button>` : ""}
     </div>
-    <p class="small muted" style="margin:0">ピンクの枠に「やること」と「どこまで」を入れると、壁紙に載ります。「どこまで」は壁紙の締切に「自分」として出ます。</p>
+    <p class="small muted" style="margin:0">ピンクの枠は、締切の早い順に自動で埋まります（毎朝と、アプリを開いたとき）。選ばずに上からやれば大丈夫です。手で書き換えた枠は、そのあと自動では変わりません。</p>
   </section>
 
   <section class="sec">
@@ -736,12 +785,13 @@ function renderSet(){
   <section class="sec">
     <h2>曜日の型を入れ替える</h2>
     <div class="row wrap2">
+      <button class="btn acc" id="tplLate">後期の型（夜勤なし）</button>
       <button class="btn" id="tplSept">9月の型（大学なし・夜勤なし）</button>
-      <button class="btn" id="resetTpl">後期の型（パターン4）</button>
+      <button class="btn" id="resetTpl">後期の型（夜勤あり＝パターン4）</button>
     </div>
-    <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。10月になったら「後期の型」に戻してください。</p>
+    <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。2026年10月からは「後期の型（夜勤なし）」です。</p>
   </section>
-  <p class="small muted">sched-v9</p>`;
+  <p class="small muted">sched-v10</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -806,7 +856,7 @@ app.addEventListener("click", async ev => {
     else openEdit({scope:"tpl", wd:tplWd, index:i}, st.tpl[tplWd].blocks.slice().sort((a,b)=>a.s-b.s)[i]);
     return;
   }
-  if(t.id === "autoFill"){ autoFill(cur); return; }
+  if(t.id === "autoFill"){ if(!(await planOnPC(true, [cur]))) autoFill(cur); return; }
   if(t.id === "addBlk"){ openEdit({scope:"day", iso:cur, index:null}, null); return; }
   if(t.id === "addTpl"){ openEdit({scope:"tpl", wd:tplWd, index:null}, null); return; }
   if(t.id === "resetDay"){ if(confirm("この日の変更をやめて、曜日の型に戻しますか？")){ delete dayState(cur).blocks; save("days", cur); resetWall(); render(); } return; }
@@ -822,7 +872,8 @@ app.addEventListener("click", async ev => {
   const sug = t.closest("[data-sug]");
   if(sug){
     const d = dayState(cur);
-    (d.tasks[sug.dataset.sug] ||= {}).task = sug.dataset.label;
+    const tk = (d.tasks[sug.dataset.sug] ||= {});
+    tk.task = sug.dataset.label; delete tk.auto;   // 自分で選んだものは自動で入れ直さない
     save("days", cur); resetWall(); render(); return;
   }
   if(t.id === "notify"){ scheduleNotify(cur); return; }
@@ -877,14 +928,17 @@ app.addEventListener("click", async ev => {
     return;
   }
   if(t.id === "resetTpl"){ if(confirm("曜日の型を後期（パターン4）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = defaultTpl(); save("tpl"); toast("後期の型にしました"); render(); } return; }
-  if(t.id === "tplSept"){ if(confirm("曜日の型を9月（大学なし・夜勤なし）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = septTpl(); save("tpl"); toast("9月の型にしました"); render(); } return; }
+  if(t.id === "tplLate"){ if(confirm("曜日の型を後期（夜勤なし）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = lateTpl(); save("tpl"); toast("後期の型（夜勤なし）にしました"); render(); } return; }
+  if(t.id === "tplSept"){ if(confirm("曜日の型を9月（大学なし・夜勤なし）にしますか？（日ごとの変更と締切は残ります）")){ st.tpl = clone(septTpl()); save("tpl"); toast("9月の型にしました"); render(); } return; }
 });
 app.addEventListener("keydown", ev => { if((ev.key === "Enter" || ev.key === " ") && ev.target.matches("[data-edit]")){ ev.preventDefault(); ev.target.click(); } });
 app.addEventListener("change", ev => {
   const t = ev.target;
   if(t.dataset.task){
     const d = dayState(cur);
-    (d.tasks[t.dataset.task] ||= {})[t.dataset.f] = t.type === "checkbox" ? t.checked : t.value.trim();
+    const tk = (d.tasks[t.dataset.task] ||= {});
+    tk[t.dataset.f] = t.type === "checkbox" ? t.checked : t.value.trim();
+    if(t.dataset.f === "task" || t.dataset.f === "goal") delete tk.auto;   // 手で書き換えた枠は自動で入れ直さない
     if(t.dataset.f === "task" && t.value.trim()){
       st.recent = [t.value.trim()].concat((st.recent || []).filter(x => x !== t.value.trim())).slice(0, 12);
     }
@@ -896,9 +950,15 @@ app.addEventListener("change", ev => {
 });
 
 render();
-syncState("merge", false).then(() => importFromPC(false));
+// 開いたら：同期 → PCに今日・明日を組んでもらう（予定の取り込みもPCがやる）。PCに届かなければ取り込みだけ試す
+async function refresh(){
+  lastSync = Date.now();
+  await syncState("merge", false);
+  if(!(await planOnPC(false))) await importFromPC(false);
+}
+refresh();
 document.addEventListener("visibilitychange", () => {
-  if(!document.hidden && Date.now() - lastSync > 60000){ syncState("merge", false); importFromPC(false); }
+  if(!document.hidden && Date.now() - lastSync > 60000) refresh();
 });
 window.addEventListener("online", () => syncState("merge", false));
 if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(() => {}); }
