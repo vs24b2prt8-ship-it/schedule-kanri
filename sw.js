@@ -1,7 +1,7 @@
 // スケジュール管理 service worker
-// 画面（HTML）はネットワーク優先で3.5秒待ってだめならキャッシュ。アイコン等はキャッシュ優先。
+// 画面（HTML）はネットワーク優先（ブラウザの保存も使わず毎回取りに行く＝公開してすぐ新しい版になる）で3.5秒待ってだめならキャッシュ。アイコン等はキャッシュ優先。
 // index.html を変えたら VERSION を必ず上げる（上げないと古い画面が出続ける）
-const VERSION = "sched-v13";
+const VERSION = "sched-v14";
 const ASSETS = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
@@ -27,7 +27,7 @@ self.addEventListener("fetch", e => {
 
   if (req.mode === "navigate") {
     e.respondWith(
-      Promise.race([fetch(req), timeout(3500)])
+      Promise.race([fetch(req, {cache: "no-store"}), timeout(3500)])
         .then(res => {
           if (!res.ok) throw new Error("bad status");
           const copy = res.clone();
