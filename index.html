@@ -505,6 +505,7 @@ async function importFromPC(manual){
       n++;
     });
     if(Array.isArray(data.tasks)) st.suggest = data.tasks;
+    askList = (data.events || []).filter(e => e.needs_place && e.key);
     lastSync = Date.now();
     const hhmm = new Date().toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
     syncInfo = `${hhmm} に取り込み：予定 ${(data.events||[]).length}件（うち新しく入れたのは ${n}件）／やること候補 ${(data.tasks||[]).length}件`;
@@ -534,11 +535,55 @@ async function planOnPC(manual, dates){
     const out = await res.json();
     applyDoc(out.doc);
     if(Array.isArray(out.tasks)) st.suggest = out.tasks;
+    askList = Array.isArray(out.ask) ? out.ask : [];
     save();
     resetWall(); render();
     if(manual) toast(out.changed ? "組み直しました" : "変わるところはありませんでした");
     return true;
   }catch(e){ return false; }
+}
+
+/* ---------- 場所の質問カード（2026-10-15）----------
+   場所が決まっていない予定は、PCが前後45分を仮に空けている。ここで答えると日取りに保存され、
+   時刻表から家を出る時刻・帰る時刻を出し直して、ぶつかる枠を削り直す（何を削るかは PC の cutplan.py）。 */
+let askList = [];
+const ASK_PLACES = {online:"自宅", uni:"大学（川内）", station:"仙台駅"};
+async function answerPlace(key, kind){
+  const url = pcUrl();
+  if(!url){ toast("PCのアドレスが空です"); return; }
+  const post = (path, body) => fetch(url + path, {method:"POST", headers:{"Content-Type":"application/json; charset=utf-8"},
+    body: JSON.stringify(body)}).then(r => { if(!r.ok) throw new Error("bad"); return r.json(); });
+  try{
+    if(kind === "far"){
+      await post("/api/event", {key, no_commute:true});
+    }else if(kind === "other"){
+      const station = (prompt("最寄り駅は？（例：長町、勾当台公園）") || "").trim().replace(/駅$/, "");
+      if(!station) return;
+      const walk = parseInt(prompt("駅から歩いて何分？", "10") || "0", 10) || 0;
+      await post("/api/commute/place", {name: station + "駅", station, walk});
+      await post("/api/event", {key, place: station + "駅", no_commute:false});
+    }else{
+      await post("/api/event", {key, place: ASK_PLACES[kind], no_commute:false});
+    }
+    askList = askList.filter(a => a.key !== key);
+    toast("場所を保存しました。組み直します");
+    await planOnPC(false);
+  }catch(e){ toast("PCに届きません（PCが起きているときに答えてください）"); }
+}
+function askCards(){
+  if(!askList.length) return "";
+  return `<section class="sec"><h2>場所を教えてください</h2>
+    <p class="small muted">決まるまでは前後45分を移動として空けています。答えると時刻表で計算し直します。</p>
+    ${askList.slice(0,3).map(a => { const d = dateOf(a.date); return `<div class="card">
+      <b>${esc(a.title)}</b><div class="small muted">${d.getMonth()+1}/${d.getDate()}（${WD[wdOf(a.date)]}）${esc(a.start)}${a.location?`／${esc(a.location)}`:""}</div>
+      <div class="row wrap2" style="margin-top:8px">
+        <button class="btn" data-ask="${esc(a.key)}" data-kind="online">オンライン</button>
+        <button class="btn" data-ask="${esc(a.key)}" data-kind="uni">大学</button>
+        <button class="btn" data-ask="${esc(a.key)}" data-kind="station">仙台駅</button>
+        <button class="btn" data-ask="${esc(a.key)}" data-kind="other">その他</button>
+        <button class="btn ghost" data-ask="${esc(a.key)}" data-kind="far">遠方（自分で調整）</button>
+      </div></div>`; }).join("")}
+    ${askList.length > 3 ? `<p class="small muted">ほか${askList.length-3}件</p>` : ""}</section>`;
 }
 
 /* ---------- 10分前の通知（ntfyに予約しておく。PCもアプリも閉じていて鳴る） ---------- */
@@ -684,6 +729,7 @@ function renderDay(){
     <div class="d"><span>${rel || "&nbsp;"}</span><b>${d.getMonth()+1}/${d.getDate()}（${WD[wdOf(iso)]}）</b></div>
     <button class="arrow" data-nav="1" aria-label="次の日">›</button>
   </div>
+  ${askCards()}
   <div class="grid2">
     <label class="f"><span>日の種類</span><input id="dLabel" value="${esc(lab.label)}"></label>
     <label class="f"><span>ひとこと（右上）</span><input id="dNote" value="${esc(lab.note)}"></label>
@@ -855,6 +901,7 @@ document.querySelector("nav").addEventListener("click", ev => {
 app.addEventListener("click", async ev => {
   const t = ev.target;
   const nav = t.closest("[data-nav]"); if(nav){ cur = addDays(cur, +nav.dataset.nav); resetWall(); render(); return; }
+  const ask = t.closest("[data-ask]"); if(ask){ answerPlace(ask.dataset.ask, ask.dataset.kind); return; }
   const ed = t.closest("[data-edit]");
   if(ed){
     const i = +ed.dataset.edit;
