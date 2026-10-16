@@ -90,6 +90,7 @@ h2{margin:0;font-size:14px;font-weight:500}
 .rev input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
 .rev input[type=text]{width:104px;min-height:34px;font-size:13px;padding:5px 8px}
 .rev .btn{padding:6px 10px;font-size:12px}
+a.btn{color:var(--text);text-decoration:none;display:inline-block}
 .done b{text-decoration:line-through;color:var(--muted)}
 .wbadge{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin-left:6px;vertical-align:1px}
 
@@ -679,6 +680,7 @@ function autoFill(iso){
       goal: t.left <= cap ? (t.rank ? "出せるところまで終わらせる" : "終わらせる") : `${use}分ぶん進める`,
       auto: true,
     };
+    if(t.url) d.tasks[keyOf(b)].url = t.url;
     t.left -= use;
     n++;
     if(t.target && t.target < iso) late.push(t.label);
@@ -704,6 +706,11 @@ function render(){
   if(tab === "day") fillDatalist();
 }
 
+// マイページのURL（日取りの候補に付いてくる。IDとパスワードは来ない）。2026-10-16
+function mypageOf(tk){
+  const hit = (st.suggest || []).find(x => x.label === tk.task && x.url);
+  return hit ? hit.url : (tk.url || "");
+}
 function sugChips(iso, b){
   const all = suggestFor(iso);
   return `<div class="sug">${all.slice(0,8).map(x =>
@@ -723,6 +730,7 @@ function blockRows(list, iso){
         <input data-task="${keyOf(b)}" data-f="task" list="sugList" placeholder="やること（候補から選ぶか、打つ）" value="${esc(tk.task||"")}">
         <input data-task="${keyOf(b)}" data-f="goal" placeholder="どこまで（例：下書きを終える）" value="${esc(tk.goal||"")}">
       </div>
+      ${tk.task && mypageOf(tk) ? `<div class="rev"><a class="btn" href="${esc(mypageOf(tk))}" target="_blank" rel="noopener">マイページを開く ↗</a></div>` : ""}
       ${tk.task ? `<div class="rev">
         <label><input type="checkbox" data-task="${keyOf(b)}" data-f="done" ${tk.done?"checked":""}>できた</label>
         <input type="text" inputmode="numeric" data-task="${keyOf(b)}" data-f="actual" placeholder="実際 分" value="${esc(tk.actual||"")}">
@@ -859,7 +867,7 @@ function renderSet(){
     </div>
     <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。2026年10月からは「後期の型（夜勤なし）」です。</p>
   </section>
-  <p class="small muted">sched-v15</p>`;
+  <p class="small muted">sched-v16</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -943,7 +951,7 @@ app.addEventListener("click", async ev => {
     const d = dayState(cur);
     const tk = (d.tasks[sug.dataset.sug] ||= {});
     if(tk.task !== sug.dataset.label) delete tk.goal;   // 自動で入っていた「◯分ぶん進める」は別の作業には合わない
-    tk.task = sug.dataset.label; delete tk.auto;   // 自分で選んだものは自動で入れ直さない
+    tk.task = sug.dataset.label; delete tk.auto; delete tk.url;   // 自分で選んだものは自動で入れ直さない
     save("days", cur); resetWall(); render(); return;
   }
   if(t.dataset.stop || t.dataset.unstop){
@@ -1024,7 +1032,8 @@ app.addEventListener("change", ev => {
     const d = dayState(cur);
     const tk = (d.tasks[t.dataset.task] ||= {});
     tk[t.dataset.f] = t.type === "checkbox" ? t.checked : t.value.trim();
-    if(t.dataset.f === "task" || t.dataset.f === "goal") delete tk.auto;   // 手で書き換えた枠は自動で入れ直さない
+    if(t.dataset.f === "task" || t.dataset.f === "goal") delete tk.auto;
+    if(t.dataset.f === "task") delete tk.url;   // 別の作業になったら前のマイページは合わない   // 手で書き換えた枠は自動で入れ直さない
     if(t.dataset.f === "task" && t.value.trim()){
       st.recent = [t.value.trim()].concat((st.recent || []).filter(x => x !== t.value.trim())).slice(0, 12);
     }
