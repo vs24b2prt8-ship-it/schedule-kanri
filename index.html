@@ -91,6 +91,8 @@ h2{margin:0;font-size:14px;font-weight:500}
 .rev input[type=text]{width:104px;min-height:34px;font-size:13px;padding:5px 8px}
 .rev .btn{padding:6px 10px;font-size:12px}
 a.btn{color:var(--text);text-decoration:none;display:inline-block}
+.dlnote{grid-column:3;margin-top:6px;font-size:13px;color:var(--muted)}
+.dlnote.soon{color:var(--accent);font-weight:600}
 .done b{text-decoration:line-through;color:var(--muted)}
 .wbadge{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin-left:6px;vertical-align:1px}
 
@@ -724,10 +726,19 @@ async function copyText(text){
     ta.remove(); return ok;
   }
 }
+// 締切の表示（日取りの候補の deadline / target）。2026-10-16
+function mdw(iso){ const d = dateOf(iso); return `${d.getMonth()+1}/${d.getDate()}（${WD[wdOf(iso)]}）`; }
+function dlOf(label){ return (st.suggest || []).find(x => x.label === label && x.deadline) || null; }
+function dlLine(tk, iso){
+  const x = dlOf(tk.task); if(!x) return "";
+  const n = Math.round((dateOf(x.deadline) - dateOf(iso)) / 864e5);
+  const left = n > 0 ? `あと${n}日` : n === 0 ? "この日が締切" : "締切を過ぎています";
+  return `<div class="dlnote ${n <= 2 ? "soon" : ""}">締切 ${mdw(x.deadline)}・${left}${x.target && x.target !== x.deadline ? `（目標 ${mdw(x.target)}）` : ""}</div>`;
+}
 function sugChips(iso, b){
   const all = suggestFor(iso);
   return `<div class="sug">${all.slice(0,8).map(x =>
-      `<button type="button" data-sug="${keyOf(b)}" data-label="${esc(x.label)}" class="${x.near?"near":""}">${esc(x.label)}${x.rank?`<span class="r">${x.rank}・${x.minutes}分</span>`:x.minutes?`<span class="r">${x.minutes}分</span>`:""}</button>`).join("")}
+      `<button type="button" data-sug="${keyOf(b)}" data-label="${esc(x.label)}" class="${x.near?"near":""}">${esc(x.label)}${x.rank?`<span class="r">${x.rank}・${x.minutes}分${x.deadline?`・〆${+x.deadline.slice(5,7)}/${+x.deadline.slice(8,10)}`:""}</span>`:x.minutes?`<span class="r">${x.minutes}分</span>`:""}</button>`).join("")}
     ${all.length > 8 ? `<span class="more small">ほかは入力欄に打つと出ます</span>` : ""}</div>`;
 }
 function blockRows(list, iso){
@@ -743,6 +754,7 @@ function blockRows(list, iso){
         <input data-task="${keyOf(b)}" data-f="task" list="sugList" placeholder="やること（候補から選ぶか、打つ）" value="${esc(tk.task||"")}">
         <input data-task="${keyOf(b)}" data-f="goal" placeholder="どこまで（例：下書きを終える）" value="${esc(tk.goal||"")}">
       </div>
+      ${tk.task ? dlLine(tk, iso) : ""}
       ${tk.task && mypageOf(tk) ? `<div class="rev"><a class="btn" href="${esc(mypageOf(tk))}" target="_blank" rel="noopener">マイページを開く ↗</a>
         ${loginOf(tk).login_id ? `<button class="btn ghost" data-copy="id" data-label="${esc(tk.task)}">ID ${esc(loginOf(tk).login_id)} をコピー</button>` : ""}
         ${loginOf(tk).login_pw ? `<button class="btn ghost" data-copy="pw" data-label="${esc(tk.task)}">パスワードをコピー</button>` : ""}</div>` : ""}
@@ -882,7 +894,7 @@ function renderSet(){
     </div>
     <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。2026年10月からは「後期の型（夜勤なし）」です。</p>
   </section>
-  <p class="small muted">sched-v17</p>`;
+  <p class="small muted">sched-v18</p>`;
 }
 
 /* ---------- 編集シート ---------- */
