@@ -77,6 +77,14 @@ h2{margin:0;font-size:14px;font-weight:500}
 .sug button .r{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--muted);margin-left:5px}
 .sug button.near{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--bg))}
 .sug .more{color:var(--muted)}
+.pick{grid-column:3;margin-top:4px;font-size:13px}
+.pick summary{cursor:pointer;color:var(--muted);padding:4px 0;list-style:none}
+.pick summary::-webkit-details-marker{display:none}
+.pick summary::before{content:"▸ "}
+.pick[open] summary::before{content:"▾ "}
+.pick .sug{margin-top:2px}
+.skipped{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--muted)}
+.skipped button{font-size:12.5px;border:1px solid var(--border);background:var(--bg);border-radius:6px;padding:4px 9px;cursor:pointer;color:var(--text)}
 .rev{grid-column:3;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:13px;color:var(--muted)}
 .rev label{display:flex;gap:5px;align-items:center}
 .rev input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
@@ -632,7 +640,7 @@ const FIXED_SUGGEST = [
 ];
 function usedTasks(iso){
   const d = st.days[iso] || {};
-  return new Set(Object.values(d.tasks || {}).map(t => t.task).filter(Boolean));
+  return new Set(Object.values(d.tasks || {}).map(t => t.task).filter(Boolean).concat(d.skip || []));
 }
 function suggestFor(iso){
   const used = usedTasks(iso);
@@ -696,6 +704,12 @@ function render(){
   if(tab === "day") fillDatalist();
 }
 
+function sugChips(iso, b){
+  const all = suggestFor(iso);
+  return `<div class="sug">${all.slice(0,8).map(x =>
+      `<button type="button" data-sug="${keyOf(b)}" data-label="${esc(x.label)}" class="${x.near?"near":""}">${esc(x.label)}${x.rank?`<span class="r">${x.rank}・${x.minutes}分</span>`:x.minutes?`<span class="r">${x.minutes}分</span>`:""}</button>`).join("")}
+    ${all.length > 8 ? `<span class="more small">ほかは入力欄に打つと出ます</span>` : ""}</div>`;
+}
 function blockRows(list, iso){
   return list.map((b,i) => {
     const tk = iso && b.k === "d" ? taskOf(iso,b) : null;
@@ -703,9 +717,8 @@ function blockRows(list, iso){
     return `<div class="blk ${b.k==="d"?"deep":""} ${tk&&tk.done?"done":""}" style="--k:var(--k-${b.k})">
       <time>${hm(b.s)}–${hm(b.e)}</time><i></i>
       <div class="t" data-edit="${i}" role="button" tabindex="0"><b>${esc(b.t)}</b>${wl?`<span class="wbadge">壁紙 ${wl}</span>`:""}${b.sub?`<span class="sub">${esc(b.sub)}</span>`:""}</div>
-      ${tk && !tk.task && iso ? `<div class="sug">${suggestFor(iso).slice(0,5).map(x =>
-          `<button type="button" data-sug="${keyOf(b)}" data-label="${esc(x.label)}" class="${x.near?"near":""}">${esc(x.label)}${x.rank?`<span class="r">${x.rank}・${x.minutes}分</span>`:x.minutes?`<span class="r">${x.minutes}分</span>`:""}</button>`).join("")}
-        ${suggestFor(iso).length > 5 ? `<span class="more small">ほかは入力欄に打つと出ます</span>` : ""}</div>` : ""}
+      ${tk && !tk.task && iso ? sugChips(iso, b) : ""}
+      ${tk && tk.task && !tk.done && iso ? `<details class="pick"><summary>ほかのやることを選ぶ</summary>${sugChips(iso, b)}</details>` : ""}
       ${tk ? `<div class="inputs">
         <input data-task="${keyOf(b)}" data-f="task" list="sugList" placeholder="やること（候補から選ぶか、打つ）" value="${esc(tk.task||"")}">
         <input data-task="${keyOf(b)}" data-f="goal" placeholder="どこまで（例：下書きを終える）" value="${esc(tk.goal||"")}">
@@ -713,7 +726,8 @@ function blockRows(list, iso){
       ${tk.task ? `<div class="rev">
         <label><input type="checkbox" data-task="${keyOf(b)}" data-f="done" ${tk.done?"checked":""}>できた</label>
         <input type="text" inputmode="numeric" data-task="${keyOf(b)}" data-f="actual" placeholder="実際 分" value="${esc(tk.actual||"")}">
-        ${tk.done ? "" : `<button class="btn ghost" data-carry="${keyOf(b)}">明日に回す</button>`}
+        ${tk.done ? "" : `<button class="btn ghost" data-carry="${keyOf(b)}">明日に回す</button>
+          <button class="btn ghost" data-stop="${esc(tk.task)}">今日はここまで</button>`}
       </div>` : ""}` : ""}
     </div>`;
   }).join("");
@@ -739,12 +753,14 @@ function renderDay(){
     <div class="row" style="justify-content:space-between"><h2>予定</h2>
       <span class="small muted">${ds && ds.blocks ? "この日だけ変更中" : `${WD[wdOf(iso)]}曜の型のまま`}</span></div>
     <div class="blocks">${blockRows(list, iso)}</div>
+    ${ds && ds.skip && ds.skip.length ? `<div class="skipped">今日はここまで：${ds.skip.map(x =>
+      `<span>${esc(x)}</span><button data-unstop="${esc(x)}">戻す</button>`).join("")}</div>` : ""}
     <div class="row wrap2">
       <button class="btn acc" id="autoFill">やることを組み直す</button>
       <button class="btn" id="addBlk">＋ 予定を足す（面接など）</button>
       ${ds && ds.blocks ? `<button class="btn ghost" id="resetDay">曜日の型に戻す</button>` : ""}
     </div>
-    <p class="small muted" style="margin:0">ピンクの枠は、締切の早い順に自動で埋まります（毎朝と、アプリを開いたとき）。選ばずに上からやれば大丈夫です。手で書き換えた枠は、そのあと自動では変わりません。</p>
+    <p class="small muted" style="margin:0">ピンクの枠は、締切の早い順に自動で埋まります（毎朝と、アプリを開いたとき）。選ばずに上からやれば大丈夫です。変えたいときは「ほかのやることを選ぶ」から。手で選んだ枠は、そのあと自動では変わりません。今日はもう進められない作業は「今日はここまで」で外すと、その日の残りの枠に別の作業が入ります。</p>
   </section>
 
   <section class="sec">
@@ -843,7 +859,7 @@ function renderSet(){
     </div>
     <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。2026年10月からは「後期の型（夜勤なし）」です。</p>
   </section>
-  <p class="small muted">sched-v14</p>`;
+  <p class="small muted">sched-v15</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -926,8 +942,24 @@ app.addEventListener("click", async ev => {
   if(sug){
     const d = dayState(cur);
     const tk = (d.tasks[sug.dataset.sug] ||= {});
+    if(tk.task !== sug.dataset.label) delete tk.goal;   // 自動で入っていた「◯分ぶん進める」は別の作業には合わない
     tk.task = sug.dataset.label; delete tk.auto;   // 自分で選んだものは自動で入れ直さない
     save("days", cur); resetWall(); render(); return;
+  }
+  if(t.dataset.stop || t.dataset.unstop){
+    // 今日はここまで（2026-10-16 本人「NHKは今日進められる分は終わった」）
+    const d = dayState(cur), label = t.dataset.stop || t.dataset.unstop;
+    const now = cur === isoOf(new Date()) ? new Date().getHours()*60 + new Date().getMinutes() : -1;
+    if(t.dataset.stop){
+      d.skip = Array.from(new Set((d.skip || []).concat(label)));
+      // まだ始まっていない・できたにしていない枠から外す（空いた枠は組み直しで埋まる）
+      blocksOf(cur).forEach(b => { const k = keyOf(b), x = d.tasks[k];
+        if(x && x.task === label && !x.done && b.s >= now) delete d.tasks[k]; });
+    }else d.skip = (d.skip || []).filter(x => x !== label);
+    save("days", cur); resetWall(); render();
+    if(!(await planOnPC(false, [cur]))) autoFill(cur);
+    toast(t.dataset.stop ? `${label}は今日はここまで。空いた枠を組み直しました` : `${label}を候補に戻しました`);
+    return;
   }
   if(t.id === "notify"){ scheduleNotify(cur); return; }
   if(t.dataset.carry){
