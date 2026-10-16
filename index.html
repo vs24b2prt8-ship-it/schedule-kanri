@@ -711,6 +711,19 @@ function mypageOf(tk){
   const hit = (st.suggest || []).find(x => x.label === tk.task && x.url);
   return hit ? hit.url : (tk.url || "");
 }
+// IDとパスワードは候補（この端末だけに残る）にしか来ない。2026-10-16 本人「IDとパスワードは送るようにしたい」
+function loginOf(tk){
+  return (st.suggest || []).find(x => x.label === tk.task && (x.login_id || x.login_pw)) || {};
+}
+async function copyText(text){
+  try{ await navigator.clipboard.writeText(text); return true; }
+  catch(e){
+    const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", "");
+    ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
+    let ok = false; try{ ok = document.execCommand("copy"); }catch(_){}
+    ta.remove(); return ok;
+  }
+}
 function sugChips(iso, b){
   const all = suggestFor(iso);
   return `<div class="sug">${all.slice(0,8).map(x =>
@@ -730,7 +743,9 @@ function blockRows(list, iso){
         <input data-task="${keyOf(b)}" data-f="task" list="sugList" placeholder="やること（候補から選ぶか、打つ）" value="${esc(tk.task||"")}">
         <input data-task="${keyOf(b)}" data-f="goal" placeholder="どこまで（例：下書きを終える）" value="${esc(tk.goal||"")}">
       </div>
-      ${tk.task && mypageOf(tk) ? `<div class="rev"><a class="btn" href="${esc(mypageOf(tk))}" target="_blank" rel="noopener">マイページを開く ↗</a></div>` : ""}
+      ${tk.task && mypageOf(tk) ? `<div class="rev"><a class="btn" href="${esc(mypageOf(tk))}" target="_blank" rel="noopener">マイページを開く ↗</a>
+        ${loginOf(tk).login_id ? `<button class="btn ghost" data-copy="id" data-label="${esc(tk.task)}">ID ${esc(loginOf(tk).login_id)} をコピー</button>` : ""}
+        ${loginOf(tk).login_pw ? `<button class="btn ghost" data-copy="pw" data-label="${esc(tk.task)}">パスワードをコピー</button>` : ""}</div>` : ""}
       ${tk.task ? `<div class="rev">
         <label><input type="checkbox" data-task="${keyOf(b)}" data-f="done" ${tk.done?"checked":""}>できた</label>
         <input type="text" inputmode="numeric" data-task="${keyOf(b)}" data-f="actual" placeholder="実際 分" value="${esc(tk.actual||"")}">
@@ -867,7 +882,7 @@ function renderSet(){
     </div>
     <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。2026年10月からは「後期の型（夜勤なし）」です。</p>
   </section>
-  <p class="small muted">sched-v16</p>`;
+  <p class="small muted">sched-v17</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -967,6 +982,12 @@ app.addEventListener("click", async ev => {
     save("days", cur); resetWall(); render();
     if(!(await planOnPC(false, [cur]))) autoFill(cur);
     toast(t.dataset.stop ? `${label}は今日はここまで。空いた枠を組み直しました` : `${label}を候補に戻しました`);
+    return;
+  }
+  if(t.dataset.copy){
+    const lg = loginOf({task: t.dataset.label}), v = t.dataset.copy === "id" ? lg.login_id : lg.login_pw;
+    if(!v) return;
+    toast((await copyText(v)) ? (t.dataset.copy === "id" ? "IDをコピーしました" : "パスワードをコピーしました") : "コピーできませんでした");
     return;
   }
   if(t.id === "notify"){ scheduleNotify(cur); return; }
