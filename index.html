@@ -281,7 +281,7 @@ const OCT_TPL = [{"label": "大学あり", "note": "ゼミ＋夜の公園", "blo
 function octTpl(){ return JSON.parse(JSON.stringify(OCT_TPL)); }
 
 /* ---------- 保存 ---------- */
-function fresh(){ return {v:1, tpl:octTpl(), days:{}, deadlines:[], imported:{}, suggest:[], recent:[], meta:{tpl:0, days:{}, deadlines:0, imported:0, recent:0}, settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
+function fresh(){ return {v:1, tpl:octTpl(), days:{}, deadlines:[], imported:{}, suggest:[], mypages:[], recent:[], meta:{tpl:0, days:{}, deadlines:0, imported:0, recent:0}, settings:{ntfy:"", pc:"https://kawauso.tail786f62.ts.net/nittei"}}; }
 function load(){
   const base = fresh();
   try{
@@ -295,6 +295,7 @@ function load(){
       out.meta = Object.assign({tpl:0, days:{}, deadlines:0, imported:0, recent:0}, s.meta || {});
       out.meta.days = out.meta.days || {};
       out.suggest = out.suggest || [];
+      out.mypages = out.mypages || [];
       out.recent = out.recent || [];
       return out;
     }
@@ -516,6 +517,7 @@ async function importFromPC(manual){
       n++;
     });
     if(Array.isArray(data.tasks)) st.suggest = data.tasks;
+    if(Array.isArray(data.mypages)) st.mypages = data.mypages;
     askList = (data.events || []).filter(e => e.needs_place && e.key);
     lastSync = Date.now();
     const hhmm = new Date().toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
@@ -546,6 +548,7 @@ async function planOnPC(manual, dates){
     const out = await res.json();
     applyDoc(out.doc);
     if(Array.isArray(out.tasks)) st.suggest = out.tasks;
+    if(Array.isArray(out.mypages)) st.mypages = out.mypages;
     askList = Array.isArray(out.ask) ? out.ask : [];
     save();
     resetWall(); render();
@@ -704,7 +707,7 @@ function fillDatalist(){
 }
 function render(){
   document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-current", String(b.dataset.tab === tab)));
-  if(tab === "day") renderDay(); else if(tab === "tpl") renderTpl(); else renderSet();
+  if(tab === "day") renderDay(); else if(tab === "tpl") renderTpl(); else if(tab === "book") renderBook(); else renderSet();
   if(tab === "day") fillDatalist();
 }
 
@@ -766,6 +769,91 @@ function blockRows(list, iso){
       </div>` : ""}` : ""}
     </div>`;
   }).join("");
+}
+
+/* ---------- 合否→次の面接の予約（2026-11-01 本人「合否が出たらすぐ開いて予約しないと空いていない」） ----------
+   Gmailの見張り（Apps Script）が合否・日程のメールを見つけると ntfy を送り、押すと #book=社名 でここが開く。
+   マイページ・ID・パスワードは日取りから端末にだけ届く（st.mypages。共通データには載せない）。
+   空いている時間はこの端末の予定だけで出す＝PCが寝ていても出る。 */
+let bookCo = "";
+const IV_RE = /面接|面談|選考|GD|グループディスカッション|インターン|1day|説明会/;
+function mypageByName(name){
+  const n = String(name || "").replace(/\s/g, "");
+  if(!n) return null;
+  const list = st.mypages || [];
+  return list.find(x => x.name.replace(/\s/g, "") === n)
+      || list.find(x => { const a = x.name.replace(/\s/g, ""); return a.includes(n) || n.includes(a); }) || null;
+}
+function hasIv(iso){ return blocksOf(iso).some(b => b.k === "f" && IV_RE.test(b.t || "")); }
+// 向こう14日で面接を入れてよい時間。動かせない予定（固定・バイト・移動）を避け、11:00〜19:30の間で60分以上空いているところ。
+// カレンダーから来た予定は前後30分も空けておく。同じ日に別の選考があると下げる（日取りのスコアと同じ考え方）。
+function bookSlots(days = 14){
+  const today = isoOf(new Date()), now = new Date().getHours()*60 + new Date().getMinutes(), out = [];
+  for(let i = 0; i < days; i++){
+    const iso = addDays(today, i);
+    const busy = blocksOf(iso).filter(b => ["f","w","m"].includes(b.k)).map(b => {
+      const pad30 = b.k === "f" && /カレンダー/.test(b.sub || "") ? 30 : 0;
+      return [b.s - pad30, b.e + pad30];
+    }).sort((a,b) => a[0] - b[0]);
+    let from = i === 0 ? Math.max(660, Math.ceil((now + 120) / 30) * 30) : 660;
+    const END = 1170, wins = [];
+    for(const [s, e] of busy.concat([[END, END]])){
+      const to = Math.min(s, END);
+      if(to - from >= 60) wins.push([from, to]);
+      from = Math.max(from, e);
+      if(from >= END) break;
+    }
+    if(!wins.length) continue;
+    let score = 100, why = [];
+    if(hasIv(iso)){ score -= 35; why.push("同じ日に別の選考"); }
+    else if(hasIv(addDays(iso, -1)) || hasIv(addDays(iso, 1))){ score -= 12; why.push("前後の日に選考"); }
+    wins.forEach(([s, e]) => out.push({iso, s, e, score: score - (e - s < 120 ? 5 : 0), why: why.join("・")}));
+  }
+  return out;
+}
+const slotText = x => `${mdw(x.iso)} ${hm(x.s)}〜${hm(x.e)}`;
+function renderBook(){
+  const mp = mypageByName(bookCo), slots = bookSlots();
+  const best = slots.slice().sort((a,b) => b.score - a.score || a.iso.localeCompare(b.iso) || a.s - b.s).slice(0, 5);
+  const byDay = {};
+  slots.forEach(x => (byDay[x.iso] ||= []).push(x));
+  const names = (st.mypages || []).map(x => x.name);
+  app.innerHTML = `
+  <section class="sec">
+    <div class="row" style="justify-content:space-between"><h2>次の面接を予約する</h2>
+      <button class="btn ghost" id="bookClose">閉じる</button></div>
+    <label class="f"><span>会社</span><input id="bookCo" list="bookCos" value="${esc(bookCo)}" placeholder="社名"></label>
+    <datalist id="bookCos">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+    ${!names.length ? `<p class="small muted">マイページの情報がまだ届いていません。PCが起きているときに一度アプリを開くと届きます。</p>` : ""}
+  </section>
+
+  <section class="sec">
+    <h2>1. マイページを開く</h2>
+    ${mp && mp.url ? `<div class="row wrap2">
+        <a class="btn acc" href="${esc(mp.url)}" target="_blank" rel="noopener">${esc(mp.name)} のマイページ ↗</a>
+        ${mp.login_id ? `<button class="btn ghost" data-bcopy="id">ID ${esc(mp.login_id)} をコピー</button>` : ""}
+        ${mp.login_pw ? `<button class="btn ghost" data-bcopy="pw">パスワードをコピー</button>` : ""}
+      </div>`
+      : `<p class="small muted">${mp ? `${esc(mp.name)} はマイページのURLが就活管理に入っていません。メールのリンクから開いてください。` : bookCo ? "受験リストの本命・進行中に、この社名が見つかりません。メールのリンクから開いてください。" : "上で会社を選んでください。"}</p>`}
+  </section>
+
+  <section class="sec">
+    <h2>2. この中から取る（上から順に）</h2>
+    ${best.length ? `<div class="blocks">${best.map((x, i) => `<div class="card">
+        <b>${i === 0 ? "◎ " : "○ "}${slotText(x)}</b>
+        ${x.why ? `<div class="small muted">${esc(x.why)}</div>` : ""}</div>`).join("")}</div>
+      <div class="row wrap2"><button class="btn ghost" data-bcopy="slots">この5つを希望日時の文にしてコピー</button></div>`
+      : `<p class="small muted">向こう2週間で、11:00〜19:30に60分以上空いている時間がありません。</p>`}
+    <details><summary class="small">ほかの空いている時間（日ごと）</summary>
+      ${Object.keys(byDay).map(iso => `<div class="small" style="margin:6px 0"><b>${mdw(iso)}</b>　${byDay[iso].map(x => `${hm(x.s)}〜${hm(x.e)}`).join("／")}${byDay[iso][0].why ? `<span class="muted">（${esc(byDay[iso][0].why)}）</span>` : ""}</div>`).join("")}
+    </details>
+    <p class="small muted">授業・夜勤・英智学館・移動と、カレンダーの予定（前後30分）を避けています。対面なら、家を出る時間も見てください。</p>
+  </section>
+
+  <section class="sec">
+    <h2>3. 予約したら</h2>
+    <p class="small">その日の画面の「＋ 予定を足す（面接など）」で入れておくと、ロック画面と10分前の通知に出ます。</p>
+  </section>`;
 }
 
 function renderDay(){
@@ -894,7 +982,7 @@ function renderSet(){
     </div>
     <p class="small muted" style="margin:0">入れ替えても、日ごとに変えた予定・やること・締切はそのまま残ります。2026年10月からは「後期の型（夜勤なし）」です。</p>
   </section>
-  <p class="small muted">sched-v18</p>`;
+  <p class="small muted">sched-v19</p>`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -1002,6 +1090,18 @@ app.addEventListener("click", async ev => {
     toast((await copyText(v)) ? (t.dataset.copy === "id" ? "IDをコピーしました" : "パスワードをコピーしました") : "コピーできませんでした");
     return;
   }
+  if(t.dataset.bcopy){
+    const mp = mypageByName(bookCo) || {};
+    let v = "";
+    if(t.dataset.bcopy === "slots"){
+      v = bookSlots().sort((a,b) => b.score - a.score || a.iso.localeCompare(b.iso) || a.s - b.s).slice(0, 5)
+        .map((x, i) => `第${i+1}希望：${slotText(x)}`).join("\n");
+    }else v = t.dataset.bcopy === "id" ? mp.login_id : mp.login_pw;
+    if(!v) return;
+    toast((await copyText(v)) ? ({id:"IDを", pw:"パスワードを", slots:"希望日時を"}[t.dataset.bcopy] + "コピーしました") : "コピーできませんでした");
+    return;
+  }
+  if(t.id === "bookClose"){ tab = "day"; history.replaceState(null, "", location.pathname + location.search); render(); return; }
   if(t.id === "notify"){ scheduleNotify(cur); return; }
   if(t.dataset.carry){
     const tk = taskOf(cur, {s:+t.dataset.carry.split("-")[0], e:+t.dataset.carry.split("-")[1]});
@@ -1073,10 +1173,21 @@ app.addEventListener("change", ev => {
     save("days", cur); if(t.dataset.f === "done" || t.dataset.f === "task") render(); resetWall(); document.getElementById("shareWall").disabled = true; return; }
   if(t.id === "dLabel" || t.id === "dNote"){ dayState(cur)[t.id === "dLabel" ? "label" : "note"] = t.value.trim(); save("days", cur); resetWall(); return; }
   if(t.id === "tLabel" || t.id === "tNote"){ st.tpl[tplWd][t.id === "tLabel" ? "label" : "note"] = t.value.trim(); save("tpl"); return; }
+  if(t.id === "bookCo"){ bookCo = t.value.trim(); render(); return; }
   if(t.id === "pcUrl"){ st.settings.pc = t.value.trim(); save(); toast("保存しました"); return; }
   if(t.id === "ntfy"){ st.settings.ntfy = t.value.trim(); save(); toast("保存しました"); return; }
 });
 
+// ntfy の通知から #book=社名 で開いたら予約の画面（2026-11-01）
+function openFromHash(){
+  const m = location.hash.match(/^#book=(.*)$/);
+  if(!m) return false;
+  try{ bookCo = decodeURIComponent(m[1]); }catch(e){ bookCo = m[1]; }
+  tab = "book"; window.scrollTo(0,0);
+  return true;
+}
+openFromHash();
+window.addEventListener("hashchange", () => { if(openFromHash()) render(); });
 render();
 // 開いたら：同期 → PCに今日・明日を組んでもらう（予定の取り込みもPCがやる）。PCに届かなければ取り込みだけ試す
 async function refresh(){
